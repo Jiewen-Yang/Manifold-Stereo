@@ -1,238 +1,142 @@
-# Manifold-Stereo
+<h1 align="center">Manifold-Stereo</h1>
 
-Code for **Manifold-Guided Stereo-Monocular Refinement for Endoscopic Stereo Disparity Estimation** (NeurIPS 2026).
+<p align="center">
+  <strong>Manifold-Guided Stereo-Monocular Refinement<br>for Endoscopic Stereo Disparity Estimation</strong>
+</p>
 
-The implementation retains the original `EndoStereoFM` class and configuration names.
+<p align="center">NeurIPS 2026 · Official Implementation</p>
 
-**[Paper (coming soon)]**  |  **[Model Zoo (coming soon)]**  |  **[Dataset](#数据集准备)**
+<p align="center">
+  <a href="#method">Method</a> ·
+  <a href="#setup">Setup</a> ·
+  <a href="#training">Training</a> ·
+  <a href="#evaluation">Evaluation</a> ·
+  <a href="#citation">Citation</a>
+</p>
 
-**Manifold-Stereo** combines monocular depth priors ([Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2)), cost-volume-conditioned latent residual flow, stereo-scale alignment, and geometric consistency gating for endoscopic stereo disparity estimation. The latent flow refines a monocular disparity candidate before its contribution is regulated during recurrent stereo refinement.
+Manifold-Stereo combines calibrated stereo geometry with monocular depth priors for endoscopic disparity estimation. It refines a monocular candidate in a **cost-volume-induced local correction space**, then controls its contribution through **geometric consistency-gated recurrent refinement**.
 
----
+## Method
 
-## Project Structure
+![Figure 1: Cost-volume-guided local correction of a monocular disparity candidate.](assets/figures/figure1_motivation.png)
 
-```
-Manifold-Stereo/
-├── config/
-│   └── train_scared.yaml          # Main training configuration
-├── core/
-│   ├── endo_stereo_fm.py          # Main model (EndoStereoFM class)
-│   ├── stereo_datasets.py          # Dataset classes (SCARED, Hamlyn, SERV-CT)
-│   ├── geo_encoder.py             # Geometric encoding volume
-│   ├── depth_refine.py            # REMP refinement module
-│   ├── feat_update.py             # GRU update blocks
-│   ├── disp_warp.py              # Disparity warping
-│   ├── stereo_submodule.py        # Basic building blocks (BasicConv, etc.)
-│   └── utils/
-│       ├── augmentor.py           # Data augmentation (FlowAugmentor)
-│       ├── frame_utils.py         # I/O utilities (disparity readers, PFM, etc.)
-│       ├── geom_utils.py          # Geometric helpers (disp2depth, etc.)
-│       ├── file_io.py             # File I/O helpers
-│       └── utils.py               # Misc utilities (InputPadder, etc.)
-├── Depth-Anything-V2-list3/        # Depth Anything V2 submodule
-│   └── depth_anything_v2/
-│       ├── dpt.py                 # DPT decoder
-│       └── dinov2_layers/        # DINOv2 building blocks
-├── train_scared.py                # Training entry point
-├── evaluate_scared.py             # SCARED evaluation
-├── evaluate_hamlyn.py             # Hamlyn evaluation
-├── evaluate_servct.py             # SERV-CT evaluation
-├── vis_scared.py                  # Visualization scared hamlyn servct script()
-├── inference_debug.py            # Debug/inference utility
-└── model_stats.py                 # Model statistics
-```
+**Figure 1 — Motivation.** Local latent corrections use stereo evidence to refine a monocular candidate in regions with ambiguous correspondence. [Original PDF](assets/figures/figure1_motivation.pdf)
 
----
+![Figure 2: The complete Manifold-Stereo pipeline, from stereo and monocular candidates to reliability-gated recurrent updates.](assets/figures/figure2_overview.png)
 
-## Table of Contents
+**Figure 2 — Framework.** Stereo and monocular candidate construction, conditional latent residual flow, and reliability-gated recurrent refinement. [Original PDF](assets/figures/figure2_overview.pdf)
 
-- [Overview](#overview)
-- [Installation](#installation)
-- [Dataset Preparation](#数据集准备)
-- [Training](#training)
-- [Evaluation](#evaluation)
-- [Acknowledgements](#acknowledgements)
+- **Local correction:** an image-aligned latent field encodes stereo cost-volume geometry.
+- **Residual refinement:** a conditional latent trajectory decodes corrections to the monocular candidate.
+- **Reliability gating:** stereo-scale alignment and geometric consistency regulate the candidate during recurrent updates.
 
----
+The model is implemented in [core/endo_stereo_fm.py](core/endo_stereo_fm.py). Class and configuration names retain the original `EndoStereoFM` / `flow_matching` identifiers; the method uses a conditional latent residual flow.
 
-## Overview
+## Setup
 
-Traditional stereo matching struggles in surgical environments due to:
-
-- **Weakly textured tissues** with low visual features
-- **Specular reflections** and blood occlusion
-- **Large depth variance** across surgical phases
-
-Manifold-Stereo addresses these by fusing a monocular depth prior with geometric stereo features through:
-
-1. **Monocular Depth Encoder** — frozen Depth Anything V2 providing strong semantic priors
-2. **Geometric Encoding Volume** — GWC (Group-wise Correlation Volume) + Hourglass 3D CNN
-3. **Conditional Latent Residual Flow** — ODE-based latent refinement that decodes a correction to the monocular disparity candidate
-4. **Geometric Consistency Gating** — spatial contribution weights based on left-right feature alignment, applied after stereo-scale alignment of the candidate
-
----
-
-## Installation
-
-### Requirements
-
-- Python 3.8
-- CUDA >= 11.0
-- NVIDIA GPU with >= 16GB VRAM (for training)
-
-### Environment Setup
+Run the following commands from a machine with an NVIDIA GPU and a driver compatible with CUDA 11.8:
 
 ```bash
-# Create conda environment
-conda create -n endo_stereo_fm python=3.8
-conda activate endo_stereo_fm
+git clone https://github.com/Jiewen-Yang/Manifold-Stereo.git
+cd Manifold-Stereo
 
-# Install PyTorch
-pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118
-
-# Install dependencies
-pip install tqdm scipy opencv-python scikit-image tensorboard matplotlib timm==0.6.13
-pip install mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu118/torch2.1/index.html
-pip install accelerate==1.0.1 hydra-core omegaconf
-
-# Optional: for higher-precision ODE solving in Flow Matching
-pip install torchdiffeq
+conda create -n manifold-stereo python=3.10 -y
+conda activate manifold-stereo
+python -m pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118
+python -m pip install "numpy<2" "opencv-python<4.12" scipy scikit-image pillow imageio \
+    matplotlib tqdm opt_einsum lz4 pyyaml hydra-core omegaconf accelerate==1.0.1 wandb torchdiffeq
 ```
 
-### Pretrained Weights
+### Prepare weights and data
 
-1. Download **Depth Anything V2** pretrained weights:
-  ```bash
-   # Place the weight file at the project root
-   # e.g., F:/depth_anything_v2_vitl.pth
-  ```
-   Available variants: [vits](https://huggingface.co/spaces/depthanything/Depth-Anything-V2/blob/main/depth_anything_v2_vits.pth), [vitb](https://huggingface.co/spaces/depthanything/Depth-Anything-V2/blob/main/depth_anything_v2_vitb.pth), [vitl](https://huggingface.co/spaces/depthanything/Depth-Anything-V2/blob/main/depth_anything_v2_vitl.pth), [vitg](https://huggingface.co/spaces/depthanything/Depth-Anything-V2/blob/main/depth_anything_v2_vitg.pth)
-2. Update the weight path in `core/endo_stereo_fm.py` (line ~498) or set it in your config.
-
----
-
-## 数据集准备
-
-### SCARED (Training + Evaluation)
-
-Download from the [SCARED dataset page](https://endovissub2019-scared.grand-challenge.org/) and organize as follows:
-
-```
-${SCARED_ROOT}/
-├── train_data/
-│   ├── dataset_1/
-│   │   └── keyframe_1/
-│   │       └── data/
-│   │           ├── left_rectified/   # 000001.png, 000002.png, ...
-│   │           ├── right_rectified/
-│   │           └── disparity/         # 000001.png, 000002.png, ...  (16-bit, / 64.0)
-│   └── dataset_2/
-│       └── ...
-├── test_data/
-│   └── ...
-└── splits/
-    └── endovis/
-        ├── train_files.txt    # "dataset_1/keyframe_1 0"
-        ├── val_files.txt
-        └── test_files.txt
-```
-
-Configure in `config/train_scared.yaml`:
+1. Download the **Depth Anything V2 ViT-L** weights from the [upstream repository](https://github.com/DepthAnything/Depth-Anything-V2#pre-trained-models). In [core/endo_stereo_fm.py](core/endo_stereo_fm.py), replace the `F:/depth_anything_v2_{args.encoder}.pth` path with your local checkpoint path. The default configuration uses `encoder: vitl`.
+2. Prepare rectified **SCARED** image pairs and disparity maps. The dataset readers for SCARED, Hamlyn, and SERV-CT are in [core/stereo_datasets.py](core/stereo_datasets.py); SCARED split lists are included in [splits/endovis/](splits/endovis/).
+3. Update [config/train_scared.yaml](config/train_scared.yaml):
 
 ```yaml
-scared_root: '/path/to/endovis_data'
-scared_splits_dir: '/path/to/splits/endovis'
+scared_root: /path/to/SCARED
+scared_splits_dir: ./splits/endovis
+save_path: ./checkpoints/scared/
 ```
 
-### Hamlyn (Evaluation)
+<details>
+<summary>SCARED directory layout</summary>
 
-Download from the [Hamlyn Dataset](http://hamlyn.doc.ic.ac.uk/vision/) and organize as follows:
-
-```
-${HAMLYN_ROOT}/
-├── calibration/
-│   ├── 01/
-│   │   ├── intrinsics.txt     # fx fy cx cy
-│   │   └── extrinsics.txt     # 3x4 RT matrix
-│   ├── 02/
-│   └── ...
-├── rectified01/
-│   ├── image01/               # left images
-│   ├── image02/               # right images
-│   └── disparity01/           # left disparity PNG (16-bit, / 256.0)
-├── rectified02/
-└── ...
+```text
+SCARED/
+├── train_data/                       # dataset_1 ... dataset_7
+│   └── dataset_1/keyframe_1/data/
+│       ├── left_rectified/000001.png
+│       ├── right_rectified/000001.png
+│       └── disparity/000001.png
+└── test_data/                        # dataset_8 and later
+    └── dataset_8/keyframe_1/data/
+        ├── left_rectified/000001.png
+        ├── right_rectified/000001.png
+        └── disparity/000001.png
 ```
 
-### SERV-CT (Evaluation)
+Split entries use names such as `dataset1/keyframe1 1 l`; the loader maps these to `dataset_1/keyframe_1`. Disparity PNGs are decoded with a scale factor of 1/64.
 
-Download from the [SERV-CT dataset](https://www.sciencedirect.com/science/article/abs/pii/S1361841520301641) and organize as follows:
+</details>
 
-```
-${SERVCT_ROOT}/
-├── Left_rectified/             # 001.png, 002.png, ...
-├── Right_rectified/
-├── Disparity/                  # 001.png, 002.png, ...  (16-bit, / 256.0)
-└── Rectified_calibration/
-    ├── 001.json                # {"Q": {"data": [...], "rows": 4, "cols": 4}}
-    ├── 002.json
-    └── ...
-```
-
----
+Model checkpoints and datasets are not included in this repository. The Depth Anything V2 weights are required when initializing the model for both training and evaluation.
 
 ## Training
 
-```bash
-# Single-node multi-GPU training
-CUDA_VISIBLE_DEVICES=0,1 accelerate launch train_scared.py
+After configuring the local paths above, launch training from the repository root:
 
-# With custom config
-CUDA_VISIBLE_DEVICES=0,1 accelerate launch train_scared.py --config-dir ./config --config-name train_scared.yaml
+```bash
+CUDA_VISIBLE_DEVICES=0,1 WANDB_MODE=offline accelerate launch --multi_gpu --num_processes 2 \
+    train_scared.py --config-name train_scared
 ```
 
-Training outputs (checkpoints, logs) are saved to `./checkpoints/`.
+Checkpoints and validation logs are written to `save_path`. Adjust GPU count, batch size, and iteration settings for your environment; remove `WANDB_MODE=offline` to use online Weights & Biases logging.
 
-**Training loss components:**
+Two ablation configurations are included:
 
-- Stereo disparity regression loss
-- Flow matching latent loss (optional)
-- Geodesic consistency loss (optional)
-- Uncertainty calibration loss (optional)
+| Ablation | Hydra configuration name |
+| --- | --- |
+| Without geometric gating | `train_scared_exp01_no_geo_gating` |
+| Without latent residual-flow correction | `train_scared_exp02_no_flow_matching` |
 
----
+Select an ablation by changing `--config-name` in the training command.
 
 ## Evaluation
 
+Use a trained Manifold-Stereo checkpoint and supply the dataset paths explicitly. Run from the repository root:
+
 ```bash
 # SCARED
-python evaluate_scared.py
+python evaluate_scared.py --model_path /path/to/model.pth \
+    --data_root /path/to/SCARED --split_file ./splits/endovis/test_files.txt
 
 # Hamlyn
-python evaluate_hamlyn.py
+python evaluate_hamlyn.py --model_path /path/to/model.pth \
+    --data_root /path/to/Hamlyn
 
 # SERV-CT
-python evaluate_servct.py
+python evaluate_servct.py --model_path /path/to/model.pth \
+    --data_root /path/to/SERV-CT
 ```
 
-**Metrics computed:**
+All three scripts accept `--config_path` and `--iters` (default: 32). Use the configuration that matches your checkpoint. See [vis_scared.py](vis_scared.py) for the visualization utility.
 
+## Citation
 
-| Level         | Metrics                                             |
-| ------------- | --------------------------------------------------- |
-| **Disparity** | MAE, D1-ratio (1px, 2px, 3px, 5px threshold), Bad-X |
-| **Depth**     | Abs Rel, Sq Rel, RMSE, RMSE(log), δ1/δ2/δ3          |
+```bibtex
+@inproceedings{yang2026manifoldstereo,
+  title     = {Manifold-Guided Stereo-Monocular Refinement for Endoscopic Stereo Disparity Estimation},
+  author    = {Yang, Jiewen and Zhong, Yi and Pu, Bin and Dong, Xingbo and Zheng, Ming and Lin, Qika and He, Kai and Zhang, Xuechen},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {2026}
+}
+```
 
+## Acknowledgements and license
 
----
+We thank [MonSter](https://github.com/Junda24/MonSter), [RAFT-Stereo](https://github.com/princeton-vl/RAFT-Stereo), [IGEV](https://github.com/gangweiX/IGEV), and [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2) for their open research and code.
 
-## Acknowledgements
+See [LICENSE](LICENSE) for the included MonSter Model License; upstream components retain their respective licenses.
 
-This project builds upon several excellent works:
-
-- **[MonSter](https://github.com/Junda24/MonSter)** — Monocular Stereo Matching
-- **[RAFT-Stereo](https://github.com/princeton-vl/RAFT-Stereo)** — Recurrent All-Pairs Field Transforms for Stereo
-- **[IGEV](https://github.com/gangweiX/IGEV)** — Iterative Geometry Encoding Volume
-- **[Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2)** — Monocular Depth Estimation
-
+> MonSter model is licensed under the MonSter Model License, Copyright © Autel Robotics Co., Ltd. and Huazhong University of Science and Technology. All Rights Reserved.
