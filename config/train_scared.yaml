@@ -1,0 +1,40 @@
+wandb: {}
+project_name: scared
+restore_ckpt: null
+logdir: './checkpoints/scared_geo/'
+encoder: 'vitl'
+batch_size: 8
+train_datasets: ['scared']
+val_dataset: 'scared'
+scared_root: '/media/Storage3/ug_zy/'
+scared_splits_dir: '/media/Storage3/ug_zy/splits/endovis'
+lr: 1e-4
+wdecay: 1e-5
+total_step: 50000
+save_frequency: 2000
+save_path: ./checkpoints/scared_320256/
+val_frequency: 2000
+image_size: [320, 256]
+train_iters: 22
+valid_iters: 32
+corr_implementation: "reg"
+corr_levels: 2
+corr_radius: 4
+n_downsample: 2
+n_gru_layers: 3
+hidden_dims: [128, 128, 128]
+max_disp: 192
+saturation_range: [0.7, 1.3]
+do_flip: False
+spatial_scale: [-0.2, 0.5]
+noyjitter: True
+num_gpu: 2
+seed: 655
+use_geo_gating: True
+use_geo_outputs: True
+use_flow_matching: True
+use_spatial_latent: True
+use_ode_solver: True
+flow_latent_dim: 128
+flow_cond_dim: 128
+flow_steps: 8
