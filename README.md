@@ -1,10 +1,7 @@
-<h1 align="center">Manifold-Stereo</h1>
-
-<p align="center">
-  <strong>Manifold-Guided Stereo-Monocular Refinement<br>for Endoscopic Stereo Disparity Estimation</strong>
-</p>
-
-<p align="center">NeurIPS 2026 · Official Implementation</p>
+<h1 align="center">
+  Manifold-Guided Stereo-Monocular Refinement<br>
+  for Endoscopic Stereo Disparity Estimation
+</h1>
 
 <p align="center">
   <a href="#method">Method</a> ·
