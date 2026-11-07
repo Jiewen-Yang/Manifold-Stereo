@@ -244,8 +244,8 @@ def main(cfg):
     # Load SCARED test set for validation
     val_scared = datasets.SCARED(
         aug_params={}, 
-        root=cfg.scared_root, 
-        split_file=os.path.join(cfg.scared_splits_dir, 'test_files.txt')
+        root=cfg.scared_root,
+        image_set='test',
     )
     val_scared_loader = torch.utils.data.DataLoader(val_scared, batch_size=int(1),
         pin_memory=True, shuffle=False, num_workers=int(4), drop_last=False)

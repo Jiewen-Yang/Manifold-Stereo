@@ -4,7 +4,6 @@ import torch.utils.data as data
 import torch.nn.functional as F
 import logging
 import os
-import re
 import copy
 import random
 from glob import glob
@@ -310,44 +309,88 @@ class Hamlyn(StereoDataset):
 
 
 class SCARED(StereoDataset):
-    def __init__(self, aug_params=None, root='/path/to/endovis_data', split_file='splits/endovis/train_files.txt'):
+    """SCARED loaded from the directory-level train/test split.
+
+    The local SCARED copy is organized as follows::
+
+        train_data/dataset_{1,2,3,6,7}/...
+        test_data/dataset_{8,9}/...
+
+    We intentionally scan these directories instead of using the original
+    frame-list files.  A sample is added only when its left image, right image,
+    and disparity map are all present.
+    """
+
+    TRAIN_DATASETS = (1, 2, 3, 6, 7)
+    TEST_DATASETS = (8, 9)
+
+    def __init__(self, aug_params=None, root='/path/to/scared', image_set='train'):
         super(SCARED, self).__init__(aug_params, sparse=True, reader=frame_utils.readDispSCARED)
-        assert os.path.exists(root), f"Dataset root path {root} does not exist!"
+        if not os.path.isdir(root):
+            raise FileNotFoundError(f"SCARED root path {root} does not exist or is not a directory")
+        if image_set not in ('train', 'test'):
+            raise ValueError(f"SCARED image_set must be 'train' or 'test', got {image_set!r}")
+
         self.root = root
+        self.image_set = image_set
+        data_split = 'train_data' if image_set == 'train' else 'test_data'
+        dataset_ids = self.TRAIN_DATASETS if image_set == 'train' else self.TEST_DATASETS
+        split_root = os.path.join(root, data_split)
 
-        with open(split_file, 'r') as f:
-            filenames = f.read().splitlines()
+        if not os.path.isdir(split_root):
+            raise FileNotFoundError(f"SCARED {image_set} directory not found: {split_root}")
 
-        for line in filenames:
-            parts = line.split()
-            folder = parts[0]
-            frame_index = int(parts[1])
+        missing = []
+        for dataset_id in dataset_ids:
+            dataset_root = os.path.join(split_root, f'dataset_{dataset_id}')
+            if not os.path.isdir(dataset_root):
+                logging.warning("SCARED %s dataset directory is missing: %s", image_set, dataset_root)
+                continue
 
-            folder_parts = folder.split('/')
-            disk_folder = []
-            for part in folder_parts:
-                if part.startswith('dataset'):
-                    disk_folder.append(part.replace('dataset', 'dataset_', 1))
-                elif part.startswith('keyframe'):
-                    disk_folder.append(part.replace('keyframe', 'keyframe_', 1))
-                else:
-                    disk_folder.append(part)
-            disk_folder = '/'.join(disk_folder)
+            keyframe_dirs = sorted(
+                glob(os.path.join(dataset_root, 'keyframe_*')),
+                key=lambda p: self._numeric_suffix(p, 'keyframe_'),
+            )
+            for keyframe_root in keyframe_dirs:
+                left_root = os.path.join(keyframe_root, 'data', 'left_rectified')
+                right_root = os.path.join(keyframe_root, 'data', 'right_rectified')
+                disp_root = os.path.join(keyframe_root, 'data', 'disparity')
 
-            match = re.search(r'dataset(\d+)', folder)
-            sequence = match.group(1) if match else '0'
-            data_split = "train_data" if int(sequence) < 8 else "test_data"
+                left_paths = sorted(
+                    glob(os.path.join(left_root, '*.png')),
+                    key=self._numeric_stem,
+                )
+                for left_img in left_paths:
+                    filename = os.path.basename(left_img)
+                    right_img = os.path.join(right_root, filename)
+                    disp_path = os.path.join(disp_root, filename)
+                    if not (os.path.isfile(right_img) and os.path.isfile(disp_path)):
+                        missing.append((left_img, right_img, disp_path))
+                        continue
+                    self.image_list.append([left_img, right_img])
+                    self.disparity_list.append(disp_path)
 
-            f_str = "{:06d}.png".format(frame_index)
+        if not self.image_list:
+            raise RuntimeError(
+                f"No complete SCARED samples found in {split_root} for datasets {dataset_ids}"
+            )
 
-            left_img = os.path.join(self.root, data_split, disk_folder, "data", "left_rectified", f_str)
-            right_img = os.path.join(self.root, data_split, disk_folder, "data", "right_rectified", f_str)
-            disp_path = os.path.join(self.root, data_split, disk_folder, "data", "disparity", f_str)
+        logging.info(
+            "Added %d SCARED %s samples from datasets %s%s",
+            len(self.image_list), image_set, dataset_ids,
+            f"; skipped {len(missing)} incomplete samples" if missing else '',
+        )
 
-            self.image_list.append([left_img, right_img])
-            self.disparity_list.append(disp_path)
+    @staticmethod
+    def _numeric_stem(path):
+        stem = osp.splitext(osp.basename(path))[0]
+        return (0, int(stem)) if stem.isdigit() else (1, stem)
 
-        logging.info(f"Added {len(self.disparity_list)} samples from SCARED ({split_file})")
+    @staticmethod
+    def _numeric_suffix(path, prefix):
+        name = os.path.basename(path)
+        suffix = name[len(prefix):] if name.startswith(prefix) else name
+        return (0, int(suffix)) if suffix.isdigit() else (1, suffix)
 
 
 def fetch_dataloader(args):
@@ -370,16 +413,13 @@ def fetch_dataloader(args):
     print('train_datasets', args.train_datasets)
     for dataset_name in args.train_datasets:
         if dataset_name == 'scared':
-            new_dataset = SCARED(aug_params, root=args.scared_root,
-                                  split_file=os.path.join(args.scared_splits_dir, 'train_files.txt'))
+            new_dataset = SCARED(aug_params, root=args.scared_root, image_set='train')
             logging.info(f"Adding {len(new_dataset)} samples from SCARED Train")
         elif dataset_name == 'scared_val':
-            new_dataset = SCARED(aug_params, root=args.scared_root,
-                                  split_file=os.path.join(args.scared_splits_dir, 'val_files.txt'))
+            new_dataset = SCARED(aug_params, root=args.scared_root, image_set='test')
             logging.info(f"Adding {len(new_dataset)} samples from SCARED Val")
         elif dataset_name == 'scared_test':
-            new_dataset = SCARED(aug_params, root=args.scared_root,
-                                  split_file=os.path.join(args.scared_splits_dir, 'test_files.txt'))
+            new_dataset = SCARED(aug_params, root=args.scared_root, image_set='test')
             logging.info(f"Adding {len(new_dataset)} samples from SCARED Test")
         else:
             raise ValueError(f"Unknown dataset: {dataset_name}")
@@ -424,8 +464,7 @@ if __name__ == '__main__':
     # Quick test: try loading SCARED dataset
     try:
         from core.utils.frame_utils import readDispSCARED
-        dataset = SCARED(root='/path/to/endovis_data',
-                         split_file='splits/endovis/train_files.txt')
+        dataset = SCARED(root='/path/to/scared', image_set='train')
         for i in range(min(5, len(dataset))):
             path_list, img1, img2, disp_gt, valid = dataset[i][0], *dataset[i][1:]
             print(f"Sample {i}: {path_list[0]}")

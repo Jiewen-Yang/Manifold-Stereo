@@ -6,8 +6,8 @@ encoder: 'vitl'
 batch_size: 8
 train_datasets: ['scared']
 val_dataset: 'scared'
-scared_root: '/media/Storage3/ug_zy/'
-scared_splits_dir: '/media/Storage3/ug_zy/splits/endovis'
+scared_root: '/public2/mvicgs4/jyangcu/zy/dataset/scared'
+depth_ckpt: '/public2/mvicgs4/jyangcu/zy/GP_model/depth_anything_v2_vitl.pth'
 lr: 1e-4
 wdecay: 1e-5
 total_step: 50000

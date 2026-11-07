@@ -40,8 +40,8 @@ Run the following commands from a machine with an NVIDIA GPU and a driver compat
 git clone https://github.com/Jiewen-Yang/Manifold-Stereo.git
 cd Manifold-Stereo
 
-conda create -n manifold-stereo python=3.10 -y
-conda activate manifold-stereo
+# The current training environment used by this project
+conda activate Manifold_Stereo
 python -m pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118
 python -m pip install "numpy<2" "opencv-python<4.12" scipy scikit-image pillow imageio \
     matplotlib tqdm opt_einsum lz4 pyyaml hydra-core omegaconf accelerate==1.0.1 wandb torchdiffeq
@@ -49,13 +49,13 @@ python -m pip install "numpy<2" "opencv-python<4.12" scipy scikit-image pillow i
 
 ### Prepare weights and data
 
-1. Download the **Depth Anything V2 ViT-L** weights from the [upstream repository](https://github.com/DepthAnything/Depth-Anything-V2#pre-trained-models). In [core/endo_stereo_fm.py](core/endo_stereo_fm.py), replace the `F:/depth_anything_v2_{args.encoder}.pth` path with your local checkpoint path. The default configuration uses `encoder: vitl`.
-2. Prepare rectified **SCARED** image pairs and disparity maps. The dataset readers for SCARED, Hamlyn, and SERV-CT are in [core/stereo_datasets.py](core/stereo_datasets.py); SCARED split lists are included in [splits/endovis/](splits/endovis/).
+1. Download the **Depth Anything V2 ViT-L** weights from the [upstream repository](https://github.com/DepthAnything/Depth-Anything-V2#pre-trained-models), then set `depth_ckpt` in the training configuration to the local checkpoint path. The default configuration uses `encoder: vitl`.
+2. Prepare rectified **SCARED** image pairs and disparity maps. The dataset readers for SCARED, Hamlyn, and SERV-CT are in [core/stereo_datasets.py](core/stereo_datasets.py).
 3. Update [config/train_scared.yaml](config/train_scared.yaml):
 
 ```yaml
-scared_root: /path/to/SCARED
-scared_splits_dir: ./splits/endovis
+scared_root: /public2/mvicgs4/jyangcu/zy/dataset/scared
+depth_ckpt: /path/to/depth_anything_v2_vitl.pth
 save_path: ./checkpoints/scared/
 ```
 
@@ -64,34 +64,46 @@ save_path: ./checkpoints/scared/
 
 ```text
 SCARED/
-├── train_data/                       # dataset_1 ... dataset_7
+├── train_data/                       # dataset_1, dataset_2, dataset_3, dataset_6, dataset_7
 │   └── dataset_1/keyframe_1/data/
 │       ├── left_rectified/000001.png
 │       ├── right_rectified/000001.png
 │       └── disparity/000001.png
-└── test_data/                        # dataset_8 and later
-    └── dataset_8/keyframe_1/data/
+└── test_data/                        # dataset_8 and dataset_9
+    └── dataset_8/keyframe_0/data/
         ├── left_rectified/000001.png
         ├── right_rectified/000001.png
         └── disparity/000001.png
 ```
 
-Split entries use names such as `dataset1/keyframe1 1 l`; the loader maps these to `dataset_1/keyframe_1`. Disparity PNGs are decoded with a scale factor of 1/64.
+The loader scans the configured directories directly; it does not use split-list
+files. Training contains only `dataset_1`, `dataset_2`, `dataset_3`, `dataset_6`,
+and `dataset_7`, while testing contains only `dataset_8` and `dataset_9`. Only
+complete left/right/disparity triplets are kept. Disparity PNGs are decoded with
+a scale factor of 1/64.
 
 </details>
 
-Model checkpoints and datasets are not included in this repository. The Depth Anything V2 weights are required when initializing the model for both training and evaluation.
+Model checkpoints and datasets are not included in this repository. The Depth
+Anything V2 checkpoint specified by `depth_ckpt` is required when initializing
+the model for both training and evaluation.
 
 ## Training
 
 After configuring the local paths above, launch training from the repository root:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 WANDB_MODE=offline accelerate launch --multi_gpu --num_processes 2 \
+CUDA_VISIBLE_DEVICES=0,1 WANDB_MODE=offline \
+accelerate launch --multi_gpu --num_processes 2 --mixed_precision fp16 \
     train_scared.py --config-name train_scared
 ```
 
-Checkpoints and validation logs are written to `save_path`. Adjust GPU count, batch size, and iteration settings for your environment; remove `WANDB_MODE=offline` to use online Weights & Biases logging.
+With the default configuration, the global batch size is 8, so two processes
+use four samples per GPU. Checkpoints and validation logs are written to
+`save_path`; checkpoints are saved every 2000 steps and the final checkpoint is
+`final.pth`. Adjust GPU count, `batch_size`, and iteration settings for your
+environment. Set `WANDB_DIR` to a path under `/public2` if the home-directory
+quota is limited; remove `WANDB_MODE=offline` to use online Weights & Biases.
 
 Two ablation configurations are included:
 
@@ -104,12 +116,14 @@ Select an ablation by changing `--config-name` in the training command.
 
 ## Evaluation
 
-Use a trained Manifold-Stereo checkpoint and supply the dataset paths explicitly. Run from the repository root:
+Use a trained Manifold-Stereo checkpoint and supply the dataset paths explicitly.
+Run from the repository root after activating `ug_zy`:
 
 ```bash
 # SCARED
 python evaluate_scared.py --model_path /path/to/model.pth \
-    --data_root /path/to/SCARED --split_file ./splits/endovis/test_files.txt
+    --data_root /public2/mvicgs4/jyangcu/zy/dataset/scared \
+    --config_path ./config/train_scared.yaml
 
 # Hamlyn
 python evaluate_hamlyn.py --model_path /path/to/model.pth \
@@ -120,7 +134,34 @@ python evaluate_servct.py --model_path /path/to/model.pth \
     --data_root /path/to/SERV-CT
 ```
 
-All three scripts accept `--config_path` and `--iters` (default: 32). Use the configuration that matches your checkpoint. See [vis_scared.py](vis_scared.py) for the visualization utility.
+The SCARED evaluator requires `--batch_size 1` because it reads the calibration
+matrix and groups results per frame. It accepts `--config_path`, `--device`, and
+`--iters` (default: 32). Valid ground-truth disparities are in `[0.5, 192)`.
+It reports EPE, Bad1, Bad2, Bad3, Bad5, Depth_MAE, Abs_Rel, Sq_Rel, RMSE,
+RMSE_log, and Delta1/2/3. Results are first averaged within each
+`dataset_*/keyframe_*`, then averaged across keyframes. JSON, keyframe CSV, and
+dataset CSV files are written beside the checkpoint.
+
+SCARED visualization uses the fixed `[0, 192]` disparity range and a JET
+color map so colors are comparable between frames. Results are grouped under
+`dataset_*/keyframe_*`; add `--save_raw_disp` to also write the predicted
+uint16 disparity (`disparity * 64`) and `--colorbar` to save the matching
+colorbar.
+
+```bash
+python vis_scared.py \
+    --dataset scared \
+    --model_path /path/to/model.pth \
+    --data_root /public2/mvicgs4/jyangcu/zy/dataset/scared \
+    --config_path ./config/train_scared.yaml \
+    --output_dir ./visualizations/scared \
+    --save_raw_disp --colorbar
+```
+
+The visualizer writes `gt`, `pred`, and `left` PNGs under
+`dataset_*/keyframe_*`. `--save_raw_disp` additionally writes uint16 predicted
+disparities using the SCARED encoding (`disparity * 64`). Use `--max_samples`
+for a small smoke test before processing the complete test set.
 
 ## Citation
 

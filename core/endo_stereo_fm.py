@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -495,7 +496,19 @@ class EndoStereoFM(nn.Module):
 
         depth_anything = DepthAnythingV2(**mono_model_configs[args.encoder])
         depth_anything_decoder = DepthAnythingV2_decoder(**mono_model_configs[args.encoder])
-        state_dict_dpt = torch.load(f'F:/depth_anything_v2_{args.encoder}.pth', map_location='cpu')
+        # Keep the architecture unchanged, but make the frozen monocular
+        # checkpoint configurable.  The old Windows path made training fail
+        # immediately on Linux machines.
+        depth_ckpt = getattr(args, 'depth_ckpt', None)
+        if depth_ckpt is None or str(depth_ckpt).strip() == '':
+            depth_ckpt = f'F:/depth_anything_v2_{args.encoder}.pth'
+        depth_ckpt = os.path.expanduser(str(depth_ckpt))
+        if not os.path.isfile(depth_ckpt):
+            raise FileNotFoundError(
+                f'Depth Anything checkpoint not found: {depth_ckpt}. '
+                'Set depth_ckpt in the training config.'
+            )
+        state_dict_dpt = torch.load(depth_ckpt, map_location='cpu')
         depth_anything.load_state_dict(state_dict_dpt, strict=True)
         depth_anything_decoder.load_state_dict(state_dict_dpt, strict=False)
         self.mono_encoder = depth_anything.pretrained
